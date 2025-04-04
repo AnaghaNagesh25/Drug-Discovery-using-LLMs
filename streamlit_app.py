@@ -1,4 +1,23 @@
+import sys
+import subprocess
+
+# Force package path in case it's misconfigured
+sys.path.append("/home/adminuser/venv/lib/python3.12/site-packages")
+
+# Verify package install
+try:
+    import transformers
+except ModuleNotFoundError:
+    subprocess.run(["pip", "install", "--no-cache-dir", "transformers", "torch"])
+    import transformers  # Retry after install
+
+# Now import everything else
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 import streamlit as st
+import numpy as np
+import pandas as pd
+import streamlit as st
+
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 from rdkit import Chem
 from rdkit.Chem import Draw, AllChem
