@@ -26,6 +26,18 @@ import torch
 import random
 import base64
 from io import BytesIO
+import sys
+import subprocess
+
+try:
+    from rdkit import Chem
+except ModuleNotFoundError:
+    print("RDKit not found! Installing...")
+    subprocess.run(["pip", "install", "--no-cache-dir", "rdkit-pypi"])
+    from rdkit import Chem  # Retry import
+
+print("RDKit successfully imported!")
+
 
 # Load NLP Models
 bio_gpt = pipeline("text-generation", model="microsoft/BioGPT-Large")
