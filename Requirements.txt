@@ -1,0 +1,6 @@
+streamlit
+transformers
+torch
+rdkit-pypi
+py3Dmol
+matplotlib
