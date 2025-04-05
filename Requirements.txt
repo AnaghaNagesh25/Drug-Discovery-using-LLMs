@@ -1,6 +1,0 @@
-transformers==4.39.3
-torch==2.1.0
-streamlit==1.44.1
-rdkit-pypi
-py3Dmol
-matplotlib
