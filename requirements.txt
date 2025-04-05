@@ -1,6 +1,5 @@
-streamlit
+gradio
 transformers
 torch
 rdkit-pypi
 py3Dmol
-Pillow
