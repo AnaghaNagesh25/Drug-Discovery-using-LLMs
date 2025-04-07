@@ -1,98 +1,128 @@
 import gradio as gr
-import random
+from transformers import pipeline
+from rdkit import Chem
+from rdkit.Chem import AllChem
+from rdkit.Chem.Draw import rdMolDraw2D
+from rdkit.Chem import rdDepictor
 import base64
 from io import BytesIO
-from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
-from rdkit import Chem
-from rdkit.Chem import Draw, AllChem
-import torch
 import py3Dmol
+import re
 
-# Load NLP & ML models
-bio_gpt = pipeline("text-generation", model="microsoft/BioGPT-Large")
-chemberta_tokenizer = AutoTokenizer.from_pretrained("seyonec/ChemBERTa-zinc-base-v1")
-chemberta_model = AutoModelForCausalLM.from_pretrained("seyonec/ChemBERTa-zinc-base-v1")
-compliance_qa = pipeline("question-answering", model="nlpaueb/legal-bert-base-uncased")
+# Function to generate literature and 3D molecule view
+def drug_discovery(disease, symptoms):
+    # BioGPT pipeline
+    bio_gpt = pipeline("text-generation", model="microsoft/BioGPT-Large")
+    prompt = f"Recent treatments for {disease} with symptoms: {symptoms}."
+    literature = bio_gpt(prompt, max_length=200)[0]['generated_text']
 
-def extract_insights(disease, symptoms):
-    prompt = f"Recent treatments for {disease} with symptoms: {symptoms}"
-    try:
-        result = bio_gpt(prompt, max_length=200, do_sample=True)
-        return result[0]['generated_text']
-    except Exception as e:
-        return f"Error extracting insights: {str(e)}"
+    # Generate SMILES using BioGPT with stricter filtering
+    molecule_prompt = f"List 5 different valid drug-like SMILES strings that can treat {disease} with symptoms {symptoms}. Only list SMILES separated by spaces."
+    smiles_result = bio_gpt(molecule_prompt, max_length=100)[0]['generated_text']
 
-def generate_molecule():
-    sample_smiles = ["CCO", "CCN", "C1=CC=CC=C1", "C(C(=O)O)N", "CC(C)CC"]
-    return random.choice(sample_smiles)
+    # Extract and validate SMILES strings
+    smiles_matches = re.findall(r"(?<![A-Za-z0-9])[A-Za-z0-9@+\-\[\]\(\)=#$]{5,}(?![A-Za-z0-9])", smiles_result)
+    smiles = None
+    for match in smiles_matches:
+        mol_test = Chem.MolFromSmiles(match)
+        if mol_test:
+            smiles = match
+            break
+    if not smiles:
+        smiles = "C1=CC=CC=C1"  # fallback to benzene if all fail
 
-def predict_properties(smiles):
-    try:
-        inputs = chemberta_tokenizer(smiles, return_tensors="pt")
-        with torch.no_grad():
-            outputs = chemberta_model(**inputs)
-        return round(outputs.logits.mean().item(), 3)
-    except Exception as e:
-        return f"Error predicting properties: {str(e)}"
+    # Generate RDKit molecule
+    mol = Chem.MolFromSmiles(smiles)
+    if not mol:
+        return "Invalid SMILES generated", smiles, "", ""
 
-def visualize_molecule(smiles):
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        img = Draw.MolToImage(mol, size=(300, 300))
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
-    except Exception as e:
-        return f"Error visualizing molecule: {str(e)}"
+    AllChem.Compute2DCoords(mol)
 
-def generate_3d_structure(smiles):
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        mol = Chem.AddHs(mol)
-        AllChem.EmbedMolecule(mol, AllChem.ETKDG())
-        AllChem.UFFOptimizeMolecule(mol)
-        mol_block = Chem.MolToMolBlock(mol)
-        viewer = py3Dmol.view(width=400, height=400)
-        viewer.addModel(mol_block, "mol")
-        viewer.setStyle({"stick": {}})
-        viewer.zoomTo()
-        return viewer._make_html()
-    except Exception as e:
-        return f"Error generating 3D molecule: {str(e)}"
+    # Draw 2D image
+    drawer = rdMolDraw2D.MolDraw2DCairo(300, 300)
+    drawer.DrawMolecule(mol)
+    drawer.FinishDrawing()
+    img_data = drawer.GetDrawingText()
 
-def check_compliance():
-    try:
-        question = "What does FDA require for drug testing?"
-        context = "FDA requires extensive testing for new drug candidates including Phase I, II, and III clinical trials."
-        return compliance_qa(question=question, context=context)['answer']
-    except Exception as e:
-        return f"Error checking compliance: {str(e)}"
+    # Convert binary to base64
+    img_base64 = base64.b64encode(img_data).decode("utf-8")
+    img_html = f'''<div style="text-align:center; margin-top: 10px; animation: fadeIn 2s ease-in-out;">
+        <img src="data:image/png;base64,{img_base64}" alt="2D Molecule" 
+             style="border-radius: 16px; box-shadow: 0 6px 20px rgba(0,255,255,0.3); border: 1px solid #444;">
+        <div style='font-family: Arial, sans-serif; color: #eeeeee; margin-top: 8px; animation: slideUp 1.5s ease-in-out;'>💊 Visualized Drug Molecule (2D)</div>
+    </div>'''
 
-def full_pipeline(disease, symptoms):
-    insights = extract_insights(disease, symptoms)
-    smiles = generate_molecule()
-    mol_img = visualize_molecule(smiles)
-    score = predict_properties(smiles)
-    mol_3d_html = generate_3d_structure(smiles)
-    compliance = check_compliance()
-    return insights, mol_img, f"{smiles} | Score: {score}", mol_3d_html, compliance
+    # 3D molecule
+    mol3d = Chem.AddHs(mol)
+    AllChem.EmbedMolecule(mol3d)
+    AllChem.UFFOptimizeMolecule(mol3d)
+    mb = Chem.MolToMolBlock(mol3d)
 
-demo = gr.Interface(
-    fn=full_pipeline,
-    inputs=[
-        gr.Textbox(label="Disease", value="lung cancer"),
-        gr.Textbox(label="Symptoms", value="shortness of breath, weight loss")
-    ],
-    outputs=[
-        gr.Textbox(label="Literature Insights"),
-        gr.Image(label="2D Molecule"),
-        gr.Textbox(label="Molecule Info"),
-        gr.HTML(label="3D Molecule Structure"),
-        gr.Textbox(label="Compliance Info")
-    ],
-    title="🧬 AI-Driven Drug Discovery",
-    description="Enter a disease and symptoms to generate and analyze potential drug candidates using AI."
+    viewer = py3Dmol.view(width=420, height=420)
+    viewer.addModel(mb, "mol")
+    viewer.setStyle({"stick": {"colorscheme": "cyanCarbon"}})
+    viewer.setBackgroundColor("black")
+    viewer.zoomTo()
+    viewer.spin(True)
+    viewer_html_raw = viewer._make_html()
+
+    viewer_html = f'''
+    <div style="text-align:center; margin-top: 20px; animation: zoomIn 2s ease-in-out;">
+        <iframe srcdoc="{viewer_html_raw.replace('"', '&quot;')}" 
+                width="440" height="440" frameborder="0" 
+                style="border-radius: 16px; box-shadow: 0 8px 30px rgba(0,255,255,0.35);"></iframe>
+        <div style='font-family: Arial, sans-serif; color: #eeeeee; margin-top: 8px; animation: slideUp 1.5s ease-in-out;'>🧬 Animated 3D Molecule (Stick View)</div>
+    </div>'''
+
+    return literature, smiles, img_html, viewer_html
+
+# Gradio UI
+disease_input = gr.Textbox(label="🏥 Enter Disease (e.g., lung cancer)", value="lung cancer")
+symptom_input = gr.Textbox(label="💉 Enter Symptoms (e.g., cough, weight loss)", value="shortness of breath, weight loss")
+lit_output = gr.Textbox(label="📰 Literature Insights from BioGPT")
+smiles_output = gr.Textbox(label="🧪 SMILES Representation")
+img_output = gr.HTML(label="🖼️ Molecule 2D Visualization")
+viewer_output = gr.HTML(label="🔬 3D Drug Molecule Animation")
+
+custom_css = """
+@keyframes fadeIn {
+    from {opacity: 0;}
+    to {opacity: 1;}
+}
+
+@keyframes slideUp {
+    from {transform: translateY(40px); opacity: 0;}
+    to {transform: translateY(0); opacity: 1;}
+}
+
+@keyframes zoomIn {
+    from {transform: scale(0.5); opacity: 0;}
+    to {transform: scale(1); opacity: 1;}
+}
+
+body {
+    background: linear-gradient(to right, #0f2027, #203a43, #2c5364);
+    color: #eeeeee;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.gradio-container {
+    animation: fadeIn 1.5s ease-in-out;
+}
+
+.gradio-container .block-label {
+    color: #ffffff;
+}
+"""
+
+iface = gr.Interface(
+    fn=drug_discovery,
+    inputs=[disease_input, symptom_input],
+    outputs=[lit_output, smiles_output, img_output, viewer_output],
+    title="🏥 AI-Powered Drug Discovery for Hospitals",
+    description="This hospital-themed platform takes a disease and symptoms as input, retrieves biomedical insights using BioGPT, and visualizes potential drug molecules in 2D and animated 3D. Ideal for clinical research and pharma innovation.",
+    theme="default",
+    css=custom_css
 )
 
-if __name__ == "__main__":
-    demo.launch()
+iface.launch(share=True)
